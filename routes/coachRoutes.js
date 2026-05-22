@@ -117,15 +117,23 @@ router.put('/students/:id/status', async (req, res) => {
       return res.status(400).json({ message: 'Status must be Approved or Rejected.' });
     }
 
-    // Fetch student info for email
+    // Fetch student info (including current status) for guard check + email
     const [rows] = await db.execute(
-      'SELECT full_name, email FROM students WHERE id = ?', [id]
+      'SELECT full_name, email, status FROM students WHERE id = ?', [id]
     );
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Student not found.' });
     }
 
     const student = rows[0];
+
+    // ── Final-action guard ──────────────────────────────────────
+    // Once a decision has been made (Approved or Rejected) it cannot be reversed.
+    if (student.status === 'Approved' || student.status === 'Rejected') {
+      return res.status(409).json({
+        message: `This application has already been ${student.status.toLowerCase()}. No further changes are allowed.`,
+      });
+    }
 
     // Update status in DB
     await db.execute(
