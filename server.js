@@ -2,15 +2,15 @@
 // server.js  –  Main Express server entry point
 // ─────────────────────────────────────────────────────────────
 const express = require('express');
-const cors    = require('cors');
-const path    = require('path');
+const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 
 const studentRoutes = require('./routes/studentRoutes');
-const coachRoutes   = require('./routes/coachRoutes');
+const coachRoutes = require('./routes/coachRoutes');
 
-const app  = express();
-const PORT = process.env.PORT || 5000;
+const app = express();
+const PORT = process.env.PORT || 5002;
 
 // ── Middleware ────────────────────────────────────────────────
 app.use(cors({
@@ -22,12 +22,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ── Serve uploaded files as static assets ────────────────────
-// e.g. http://localhost:5000/uploads/photos/photo.jpg
+// e.g. http://localhost:5002/uploads/photos/photo.jpg
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ── API Routes ────────────────────────────────────────────────
 app.use('/api/students', studentRoutes);
-app.use('/api/coaches',  coachRoutes);
+app.use('/api/coaches', coachRoutes);
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/', (req, res) => {
