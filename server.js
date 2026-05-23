@@ -13,8 +13,28 @@ const app = express();
 const PORT = process.env.PORT || 5002;
 
 // ── Middleware ────────────────────────────────────────────────
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: 'http://localhost:5173',  // Vite dev server
+  origin: (origin, callback) => {
+    // Allow server-to-server or postman requests with no origin
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in the allowed list or is a Vercel/Netlify deployment
+    const isAllowed = allowedOrigins.includes(origin) || 
+                      origin.endsWith('.vercel.app') || 
+                      origin.endsWith('.netlify.app') ||
+                      origin.startsWith('http://localhost:');
+                      
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 
