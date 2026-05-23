@@ -23,6 +23,17 @@ const calculateAge = (dob) => {
   return age;
 };
 
+// ── Helper: get BMI category ──────────────────────────────────
+const getBmiCategory = (bmi) => {
+  if (bmi === null || bmi === undefined) return null;
+  const b = parseFloat(bmi);
+  if (isNaN(b)) return null;
+  if (b < 18.5) return 'Underweight';
+  if (b >= 18.5 && b <= 24.9) return 'Normal';
+  if (b >= 25 && b <= 29.9) return 'Overweight';
+  return 'Obese';
+};
+
 // ── POST /api/students/register ──────────────────────────────
 // Accepts multipart/form-data with fields + 3 optional files.
 router.post(
@@ -40,6 +51,7 @@ router.post(
         address, city, state, pincode,
         club_name, state_association,
         sports_applied, competition_name, age_group,
+        height_cm, weight_kg
       } = req.body;
 
       // ── Backend validation ────────────────────────────────
@@ -66,6 +78,26 @@ router.post(
       }
       if (!sports_applied) {
         return res.status(400).json({ message: 'Please select at least one sport.' });
+      }
+
+      // Height and weight validation
+      let heightCm = null;
+      let weightKg = null;
+      let bmi = null;
+      if (height_cm !== undefined && height_cm !== null && height_cm !== '') {
+        heightCm = parseFloat(height_cm);
+        if (isNaN(heightCm) || heightCm <= 0) {
+          return res.status(400).json({ message: 'Height must be a positive number.' });
+        }
+      }
+      if (weight_kg !== undefined && weight_kg !== null && weight_kg !== '') {
+        weightKg = parseFloat(weight_kg);
+        if (isNaN(weightKg) || weightKg <= 0) {
+          return res.status(400).json({ message: 'Weight must be a positive number.' });
+        }
+      }
+      if (heightCm && weightKg) {
+        bmi = Number((weightKg / ((heightCm / 100) * (heightCm / 100))).toFixed(2));
       }
 
       // ── Check duplicate email ─────────────────────────────
@@ -114,8 +146,9 @@ router.post(
            address, city, state, pincode,
            club_name, state_association,
            sports_applied, competition_name, age_group,
-           photo, birth_certificate, id_proof, status)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'Pending')`,
+           photo, birth_certificate, id_proof, status,
+           height_cm, weight_kg, bmi)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'Pending',?,?,?)`,
         [
           full_name, dob, age, gender, mobile, email, hashedPassword,
           guardian_name, guardian_mobile, relation,
@@ -123,6 +156,7 @@ router.post(
           club_name || null, state_association || null,
           sportsString, competition_name || null, age_group || null,
           photoPath, birthCertPath, idProofPath,
+          heightCm, weightKg, bmi,
         ]
       );
 
@@ -164,6 +198,7 @@ router.post('/login', async (req, res) => {
 
     // Don't send password back to frontend
     const { password: _pw, ...studentData } = student;
+    studentData.bmi_category = getBmiCategory(studentData.bmi);
 
     res.json({
       message: 'Login successful.',
@@ -307,6 +342,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Student not found.' });
     }
     const { password: _pw, ...studentData } = rows[0];
+    studentData.bmi_category = getBmiCategory(studentData.bmi);
     res.json(studentData);
   } catch (error) {
     console.error('Get student error:', error);

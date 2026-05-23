@@ -18,6 +18,17 @@ const { callAI } = require('../utils/aiService');
 
 const router = express.Router();
 
+// Helper: calculate BMI category
+const getBmiCategory = (bmi) => {
+  if (bmi === null || bmi === undefined) return null;
+  const b = parseFloat(bmi);
+  if (isNaN(b)) return null;
+  if (b < 18.5) return 'Underweight';
+  if (b >= 18.5 && b <= 24.9) return 'Normal';
+  if (b >= 25 && b <= 29.9) return 'Overweight';
+  return 'Obese';
+};
+
 // ── POST /api/coaches/login ──────────────────────────────────
 router.post('/login', async (req, res) => {
   try {
@@ -71,18 +82,25 @@ router.get('/students', async (req, res) => {
   try {
     const [students] = await db.execute(
       `SELECT id, full_name, mobile, age, age_group, sports_applied,
-              competition_name, email, status, created_at
+              competition_name, email, status, created_at,
+              height_cm, weight_kg, bmi
        FROM students
        ORDER BY created_at DESC`
     );
 
-    // Build dashboard count stats
-    const total    = students.length;
-    const pending  = students.filter(s => s.status === 'Pending').length;
-    const approved = students.filter(s => s.status === 'Approved').length;
-    const rejected = students.filter(s => s.status === 'Rejected').length;
+    // Attach bmi_category
+    const studentsWithBmi = students.map(s => ({
+      ...s,
+      bmi_category: getBmiCategory(s.bmi)
+    }));
 
-    res.json({ students, stats: { total, pending, approved, rejected } });
+    // Build dashboard count stats
+    const total    = studentsWithBmi.length;
+    const pending  = studentsWithBmi.filter(s => s.status === 'Pending').length;
+    const approved = studentsWithBmi.filter(s => s.status === 'Approved').length;
+    const rejected = studentsWithBmi.filter(s => s.status === 'Rejected').length;
+
+    res.json({ students: studentsWithBmi, stats: { total, pending, approved, rejected } });
   } catch (error) {
     console.error('Get students error:', error);
     res.status(500).json({ message: 'Server error.' });
@@ -246,6 +264,7 @@ router.get('/students/:id', async (req, res) => {
       return res.status(404).json({ message: 'Student not found.' });
     }
     const { password: _pw, ...studentData } = rows[0];
+    studentData.bmi_category = getBmiCategory(studentData.bmi);
     res.json(studentData);
   } catch (error) {
     console.error('Get student error:', error);
@@ -310,7 +329,7 @@ router.get('/export/csv', async (req, res) => {
               address, city, state, pincode,
               club_name, state_association,
               sports_applied, competition_name, age_group,
-              status, created_at
+              status, created_at, height_cm, weight_kg, bmi
        FROM students
        ORDER BY id`
     );
@@ -321,7 +340,7 @@ router.get('/export/csv', async (req, res) => {
       'address','city','state','pincode',
       'club_name','state_association',
       'sports_applied','competition_name','age_group',
-      'status','created_at',
+      'status','created_at', 'height_cm', 'weight_kg', 'bmi'
     ];
 
     const parser = new Parser({ fields });
@@ -355,12 +374,16 @@ router.get('/export/sql', async (req, res) => {
         return `'${String(val).replace(/'/g, "''")}'`;
       };
 
+      const hVal = s.height_cm === null || s.height_cm === undefined ? 'NULL' : s.height_cm;
+      const wVal = s.weight_kg === null || s.weight_kg === undefined ? 'NULL' : s.weight_kg;
+      const bVal = s.bmi === null || s.bmi === undefined ? 'NULL' : s.bmi;
+
       sql += `INSERT INTO students ` +
         `(id, full_name, dob, age, gender, mobile, email, password, ` +
         `guardian_name, guardian_mobile, relation, ` +
         `address, city, state, pincode, club_name, state_association, ` +
         `sports_applied, competition_name, age_group, ` +
-        `photo, birth_certificate, id_proof, status, created_at) VALUES ` +
+        `photo, birth_certificate, id_proof, status, created_at, height_cm, weight_kg, bmi) VALUES ` +
         `(${s.id}, ${escape(s.full_name)}, ${escape(s.dob)}, ${s.age}, ` +
         `${escape(s.gender)}, ${escape(s.mobile)}, ${escape(s.email)}, ${escape(s.password)}, ` +
         `${escape(s.guardian_name)}, ${escape(s.guardian_mobile)}, ${escape(s.relation)}, ` +
@@ -368,7 +391,7 @@ router.get('/export/sql', async (req, res) => {
         `${escape(s.club_name)}, ${escape(s.state_association)}, ` +
         `${escape(s.sports_applied)}, ${escape(s.competition_name)}, ${escape(s.age_group)}, ` +
         `${escape(s.photo)}, ${escape(s.birth_certificate)}, ${escape(s.id_proof)}, ` +
-        `${escape(s.status)}, ${escape(s.created_at)});\n`;
+        `${escape(s.status)}, ${escape(s.created_at)}, ${hVal}, ${wVal}, ${bVal});\n`;
     });
 
     res.setHeader('Content-Type', 'application/sql');
