@@ -14,6 +14,7 @@ const bcrypt   = require('bcryptjs');
 const db       = require('../db');
 const { sendStatusEmail } = require('../utils/mailer');
 const { Parser } = require('json2csv');
+const { callAI } = require('../utils/aiService');
 
 const router = express.Router();
 
@@ -88,7 +89,153 @@ router.get('/students', async (req, res) => {
   }
 });
 
+// ── GET /api/coaches/ai-athlete-insights ──────────────────────
+// Real AI-powered insights for coach/admin.
+// Sends all athlete summaries (no passwords) to the AI API
+// and returns structured per-athlete insights + summary stats.
+// AI NEVER auto-approves or auto-rejects. Final decision is manual.
+router.get('/ai-athlete-insights', async (req, res) => {
+  try {
+    // ── 1. Fetch all students (no passwords) ────────────────
+    const [students] = await db.execute(
+      `SELECT id, full_name, dob, age, gender, age_group,
+              sports_applied, competition_name, club_name,
+              state_association, status, photo,
+              birth_certificate, id_proof, created_at
+       FROM students ORDER BY created_at DESC`
+    );
+
+    // ── 2. Guard: key must be configured ───────────────────
+    if (!process.env.AI_API_KEY || process.env.AI_API_KEY.trim() === '') {
+      return res.status(503).json({
+        success: false,
+        message: 'AI API key is not configured. Please add AI_API_KEY in backend .env.',
+      });
+    }
+
+    if (students.length === 0) {
+      return res.json({
+        success: true,
+        summary: { totalAthletes: 0, strongProfiles: 0, needsReview: 0, incompleteProfiles: 0 },
+        insights: [],
+        disclaimer: 'AI recommendation is only for coach assistance. Final decision must be taken by the coach/admin.',
+      });
+    }
+
+    // ── 3. Build summarized athlete list for the prompt ───────
+    const athleteSummaries = students.map((s, idx) => {
+      let sportsArray = [];
+      if (s.sports_applied) {
+        try {
+          const p = JSON.parse(s.sports_applied);
+          sportsArray = Array.isArray(p) ? p : [p];
+        } catch {
+          sportsArray = [s.sports_applied];
+        }
+      }
+
+      const hasPhoto = !!s.photo;
+      const hasBirthCert = !!s.birth_certificate;
+      const hasIdProof = !!s.id_proof;
+
+      return `Athlete ${idx + 1}:
+  - ID: ${s.id}
+  - Name: ${s.full_name}
+  - Age: ${s.age}, Gender: ${s.gender}, Age Group: ${s.age_group || 'N/A'}
+  - Sports: ${sportsArray.join(', ') || 'Not specified'}
+  - Competition: ${s.competition_name || 'None'}
+  - Club: ${s.club_name || 'None'}, State Association: ${s.state_association || 'None'}
+  - Status: ${s.status}
+  - Documents: Photo=${hasPhoto ? 'Yes' : 'Missing'}, BirthCert=${hasBirthCert ? 'Yes' : 'Missing'}, IDProof=${hasIdProof ? 'Yes' : 'Missing'}
+  - Registered: ${s.created_at ? new Date(s.created_at).toDateString() : 'Unknown'}`;
+    }).join('\n\n');
+
+    // ── 4. Build AI prompt ─────────────────────────────────
+    const systemPrompt = `You are an expert sports coach assistant AI for a club management platform.
+Your job is to analyze a list of student athlete profiles and return structured insights to help the coach make informed decisions.
+
+CRITICAL RULES:
+- You MUST NOT automatically approve or reject any athlete.
+- All final decisions MUST remain with the human coach/admin.
+- Use careful language: "estimated", "suggested", "appears to be", "profile suggests".
+- Do not claim real stamina data unless a stamina test is mentioned; use "Estimated stamina based on sport and profile completeness".
+- If documents are missing, flag them clearly.
+- Do not invent data beyond what is given.
+- Be constructive, professional, and supportive.
+
+You MUST respond with ONLY valid JSON (no markdown, no extra text) in this exact structure:
+{
+  "summary": {
+    "totalAthletes": 0,
+    "strongProfiles": 0,
+    "needsReview": 0,
+    "incompleteProfiles": 0
+  },
+  "insights": [
+    {
+      "athleteId": 0,
+      "athleteName": "",
+      "sport": "",
+      "ageGroup": "",
+      "currentStatus": "",
+      "profileCompleteness": "",
+      "qualityScore": 0,
+      "estimatedStaminaLevel": "",
+      "strengths": [],
+      "improvementAreas": [],
+      "documentIssues": [],
+      "coachSuggestion": "",
+      "approvalSupportNote": ""
+    }
+  ]
+}
+
+For each athlete:
+- profileCompleteness: a percentage string like "75%"
+- qualityScore: integer 0-100
+- estimatedStaminaLevel: "High (Estimated)", "Medium (Estimated)", or "Needs Improvement (Estimated)"
+- strengths: list of positive profile attributes
+- improvementAreas: list of areas needing attention
+- documentIssues: list any missing or potentially missing documents
+- coachSuggestion: one actionable suggestion for the coach
+- approvalSupportNote: a balanced note to assist the coach's manual decision (never a final approval or rejection)`;
+
+    const userPrompt = `Analyze the following ${students.length} athlete profile(s) and return structured insights.
+
+${athleteSummaries}
+
+Return your complete analysis as JSON following the exact structure specified.`;
+
+    // ── 5. Call AI API ───────────────────────────────────────
+    const aiResult = await callAI(systemPrompt, userPrompt);
+
+    if (!aiResult.ok) {
+      return res.status(502).json({
+        success: false,
+        message: aiResult.error,
+      });
+    }
+
+    // ── 6. Return structured response ────────────────────────
+    return res.json({
+      success: true,
+      summary: aiResult.data.summary || {
+        totalAthletes: students.length,
+        strongProfiles: 0,
+        needsReview: 0,
+        incompleteProfiles: 0,
+      },
+      insights: aiResult.data.insights || [],
+      disclaimer: 'AI recommendation is only for coach assistance. Final decision must be taken by the coach/admin.',
+    });
+  } catch (error) {
+    console.error('Coach AI insights error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
 // ── GET /api/coaches/students/:id ───────────────────────────
+
 // Returns full student profile (no password).
 router.get('/students/:id', async (req, res) => {
   try {

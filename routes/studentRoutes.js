@@ -9,6 +9,7 @@ const express  = require('express');
 const bcrypt   = require('bcryptjs');
 const db       = require('../db');
 const { upload, processFile } = require('../middleware/upload');
+const { callAI } = require('../utils/aiService');
 
 const router = express.Router();
 
@@ -174,7 +175,129 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// ── GET /api/students/:id/ai-assistant ───────────────────────
+// Real AI-powered athlete assistant. Builds a prompt from the
+// student's actual DB profile and calls the configured AI API.
+// The AI_API_KEY is kept server-side and never sent to the frontend.
+router.get('/:id/ai-assistant', async (req, res) => {
+  try {
+    // ── 1. Fetch student from DB ────────────────────────────
+    const [rows] = await db.execute(
+      'SELECT * FROM students WHERE id = ?', [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Student not found.' });
+    }
+
+    // ── 2. Strip sensitive fields before touching AI ─────────
+    const {
+      password: _pw,
+      birth_certificate: _bc,
+      id_proof: _idp,
+      ...safeStudent
+    } = rows[0];
+
+    // ── 3. Parse sports_applied (stored as JSON string) ──────
+    let sportsArray = [];
+    if (safeStudent.sports_applied) {
+      try {
+        const parsed = JSON.parse(safeStudent.sports_applied);
+        sportsArray = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        sportsArray = [safeStudent.sports_applied];
+      }
+    }
+    const sportsText = sportsArray.join(', ') || 'Not specified';
+
+    // ── 4. Check AI key before calling ──────────────────────
+    if (!process.env.AI_API_KEY || process.env.AI_API_KEY.trim() === '') {
+      return res.status(503).json({
+        success: false,
+        message: 'AI API key is not configured. Please add AI_API_KEY in backend .env.',
+      });
+    }
+
+    // ── 5. Build the AI prompt ───────────────────────────────
+    const systemPrompt = `You are an expert sports coach and nutritionist AI assistant for a student athlete management platform.
+Your job is to analyze a student athlete's profile and return practical, safe, beginner-friendly improvement suggestions.
+
+CRITICAL RULES:
+- Never provide medical diagnoses or medical prescriptions.
+- Never recommend extreme dieting, fasting, or unsafe supplements.
+- Never recommend unsafe or dangerous workout intensities for a student.
+- Always include a safety note reminding the athlete to consult a coach, doctor, or guardian.
+- Keep all advice appropriate for a student athlete based on their age and sport.
+- Give sport-specific suggestions based on the sports_applied field.
+- Do not invent data; only use what is provided in the athlete profile.
+
+You MUST respond with ONLY valid JSON (no markdown, no extra text) in this exact structure:
+{
+  "greeting": "string",
+  "athleteSummary": "string",
+  "dietSuggestions": ["string"],
+  "trainingSuggestions": ["string"],
+  "staminaPlan": ["string"],
+  "strengthFocus": ["string"],
+  "flexibilityTips": ["string"],
+  "weeklyRoutine": ["string - each entry is one day or block e.g. Monday: ..."],
+  "motivationMessage": "string",
+  "safetyNote": "string",
+  "disclaimer": "This AI assistant gives general fitness guidance only. Final training plan should be confirmed by a qualified coach."
+}`;
+
+    const userPrompt = `Analyze this student athlete profile and generate personalized improvement suggestions.
+
+Athlete Profile:
+- Name: ${safeStudent.full_name}
+- Age: ${safeStudent.age} years
+- Gender: ${safeStudent.gender}
+- Age Group: ${safeStudent.age_group || 'Not specified'}
+- Sports Applied: ${sportsText}
+- Competition Name: ${safeStudent.competition_name || 'Not specified'}
+- Club Name: ${safeStudent.club_name || 'Not affiliated'}
+- State Association: ${safeStudent.state_association || 'Not specified'}
+- Registration Status: ${safeStudent.status}
+- Profile Photo: ${safeStudent.photo ? 'Uploaded' : 'Missing'}
+- Registered Since: ${safeStudent.created_at ? new Date(safeStudent.created_at).toDateString() : 'Unknown'}
+
+Generate a complete, sport-specific, safe, and encouraging AI assistant response as JSON.`;
+
+    // ── 6. Call AI API ───────────────────────────────────────
+    const aiResult = await callAI(systemPrompt, userPrompt);
+
+    if (!aiResult.ok) {
+      return res.status(502).json({
+        success: false,
+        message: aiResult.error,
+      });
+    }
+
+    // ── 7. Return structured response ────────────────────────
+    return res.json({
+      success: true,
+      assistant: {
+        greeting:           aiResult.data.greeting           || '',
+        athleteSummary:     aiResult.data.athleteSummary     || '',
+        dietSuggestions:    aiResult.data.dietSuggestions    || [],
+        trainingSuggestions:aiResult.data.trainingSuggestions|| [],
+        staminaPlan:        aiResult.data.staminaPlan        || [],
+        strengthFocus:      aiResult.data.strengthFocus      || [],
+        flexibilityTips:    aiResult.data.flexibilityTips    || [],
+        weeklyRoutine:      aiResult.data.weeklyRoutine      || [],
+        motivationMessage:  aiResult.data.motivationMessage  || '',
+        safetyNote:         aiResult.data.safetyNote         || '',
+        disclaimer:         aiResult.data.disclaimer         ||
+          'This AI assistant gives general fitness guidance only. Final training plan should be confirmed by a qualified coach.',
+      },
+    });
+  } catch (error) {
+    console.error('Student AI assistant error:', error);
+    res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+  }
+});
+
 // ── GET /api/students/:id ────────────────────────────────────
+
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await db.execute(
