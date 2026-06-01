@@ -6,8 +6,13 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
-const studentRoutes = require('./routes/studentRoutes');
-const coachRoutes = require('./routes/coachRoutes');
+const studentRoutes      = require('./routes/studentRoutes');
+const coachRoutes        = require('./routes/coachRoutes');
+const achievementRoutes  = require('./routes/achievementRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const paymentRoutes      = require('./routes/paymentRoutes');
+const tournamentRoutes   = require('./routes/tournamentRoutes');
+const { startReminderJobs } = require('./jobs/reminderJobs');
 
 const app = express();
 const PORT = process.env.PORT || 5002;
@@ -46,8 +51,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ── API Routes ────────────────────────────────────────────────
-app.use('/api/students', studentRoutes);
-app.use('/api/coaches', coachRoutes);
+app.use('/api/students',       studentRoutes);
+app.use('/api/coaches',        coachRoutes);
+app.use('/api/achievements',   achievementRoutes);
+app.use('/api/notifications',  notificationRoutes);
+app.use('/api/payments',       paymentRoutes);
+app.use('/api/tournaments',    tournamentRoutes);
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/', (req, res) => {
@@ -64,5 +73,11 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`\n🚀  Sports Club API running at http://localhost:${PORT}`);
   console.log(`📁  Uploads served at  http://localhost:${PORT}/uploads`);
-  console.log(`🔑  Coach seed route:  http://localhost:${PORT}/api/coaches/seed\n`);
+  console.log(`🔑  Coach seed route:  http://localhost:${PORT}/api/coaches/seed`);
+  console.log(`🏆  Achievements API:  http://localhost:${PORT}/api/achievements`);
+  console.log(`🔔  Notifications API: http://localhost:${PORT}/api/notifications`);
+  console.log(`💳  Payments API:      http://localhost:${PORT}/api/payments\n`);
+
+  // Start scheduled reminder jobs (daily emails)
+  startReminderJobs();
 });
