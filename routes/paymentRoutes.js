@@ -18,7 +18,8 @@ const Razorpay  = require('razorpay');
 const db        = require('../db');
 const { generateReceipt }           = require('../utils/receiptGenerator');
 const { sendPaymentSuccessEmail,
-        sendPaymentFailedEmail }     = require('../utils/notificationService');
+        sendPaymentFailedEmail,
+        sendTournamentRegistrationEmail } = require('../utils/notificationService');
 
 const router = express.Router();
 
@@ -269,11 +270,27 @@ router.post('/verify', async (req, res) => {
       ? `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/payments/receipt/${payment_record_id}`
       : null;
 
+    // Generic payment success email
     sendPaymentSuccessEmail(student, {
       ...updatedRecord,
       razorpay_payment_id,
       receipt_link: receiptLink,
     }).catch(e => console.error('Success email error (non-fatal):', e.message));
+
+    // ── If this payment is for a tournament, also send a dedicated
+    //    tournament registration confirmation email. ───────────────
+    if (updatedRecord.tournament_id) {
+      // Fetch the tournament record for its details (name, sport, event_date, etc.)
+      db.execute(
+        'SELECT id, name, sport, event_date, fee_amount, description FROM tournaments WHERE id = ?',
+        [updatedRecord.tournament_id]
+      ).then(([tRows]) => {
+        if (tRows.length > 0) {
+          sendTournamentRegistrationEmail(student, tRows[0])
+            .catch(e => console.error('Tournament registration email error (non-fatal):', e.message));
+        }
+      }).catch(e => console.error('Tournament fetch error (non-fatal):', e.message));
+    }
   }
 
   res.json({

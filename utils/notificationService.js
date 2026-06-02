@@ -17,12 +17,20 @@ require('dotenv').config();
 
 // ── SMTP Transporter (reuses same config as mailer.js) ────────
 const transporter = nodemailer.createTransport({
-  host:   process.env.MAIL_HOST || 'smtp.gmail.com',
-  port:   parseInt(process.env.MAIL_PORT) || 587,
-  secure: false,
+  host:    process.env.MAIL_HOST || 'smtp.gmail.com',
+  port:    parseInt(process.env.MAIL_PORT) || 587,
+  secure:  false,
+  pool:    true,          // Reuse SMTP connections (faster subsequent sends)
+  maxConnections: 5,
+  maxMessages: 100,
+  rateDelta: 1000,        // Throttle: max 'rateLimit' messages per 'rateDelta' ms
+  rateLimit: 10,
   auth: {
     user: process.env.MAIL_USER,
     pass: process.env.MAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false, // Allow self-signed or chain-incomplete TLS certs
   },
 });
 
@@ -102,17 +110,29 @@ const sendEmail = async (to, subject, html, meta = {}) => {
 
 // ── HTML email wrapper ────────────────────────────────────────
 const emailWrapper = (content) => `
-  <div style="font-family:'Google Sans',Arial,sans-serif;max-width:600px;margin:auto;background:#0A0A12;color:#e2e4cf;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
-    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:24px 32px;border-bottom:2px solid #d4ff00;">
-      <h2 style="margin:0;color:#d4ff00;font-size:1.2rem;letter-spacing:0.05em;">⚡ Sports Club Management</h2>
+  <div style="font-family:'Inter','SF Pro Display',-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:600px;margin:30px auto;background:#0A0A12;color:#e2e4cf;border-radius:24px;overflow:hidden;border:1px solid rgba(255,255,255,0.06);box-shadow:0 20px 50px rgba(0,0,0,0.5);">
+    <!-- Brand Header -->
+    <div style="background:linear-gradient(135deg,#0d0d1e 0%,#111827 100%);padding:28px 36px;border-bottom:2.5px solid #d4ff00;display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <h2 style="margin:0;color:#d4ff00;font-size:1.15rem;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;">
+          &#9889; APEX VELOCITY
+        </h2>
+        <span style="color:#06b6d4;font-size:0.7rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Sports Club Hub</span>
+      </div>
     </div>
-    <div style="padding:32px;">
+    
+    <!-- Body Content Area -->
+    <div style="padding:40px 36px;background-image:radial-gradient(circle at 90% 10%, rgba(6,182,212,0.02) 0%, transparent 60%);">
       ${content}
-      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:24px 0;" />
-      <p style="color:rgba(197,201,172,0.5);font-size:0.8rem;margin:0;">
-        This is an automated message from Sports Club Management Platform.<br/>
-        Please do not reply to this email.
-      </p>
+      
+      <!-- Footer details -->
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:32px 0;" />
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <p style="color:rgba(197,201,172,0.45);font-size:0.75rem;line-height:1.5;margin:0;">
+          This is an automated operational transmission from Apex Velocity.<br/>
+          To protect security, please do not reply directly to this inbox.
+        </p>
+      </div>
     </div>
   </div>
 `;
@@ -209,6 +229,34 @@ const sendPaymentSuccessEmail = async (student, payment) => {
   return sendEmail(student.email, subject, html, { user_id: student.id, user_role: 'Student', notification_type: 'PaymentSuccess' });
 };
 
+/** Tournament registration confirmation email */
+const sendTournamentRegistrationEmail = async (student, tournament) => {
+  const subject = `🏆 Tournament Registration Confirmed – ${tournament.name}`;
+
+  const eventDate = tournament.event_date
+    ? new Date(tournament.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null;
+
+  const html = emailWrapper(`
+    <p>Dear <strong style="color:#d4ff00;">${student.full_name}</strong>,</p>
+    <p>🎉 You have been <strong style="color:#34D399;">successfully registered</strong> for the following tournament!</p>
+    <div style="background:rgba(212,255,0,0.05);border:1px solid rgba(212,255,0,0.2);border-radius:12px;padding:20px;margin:16px 0;">
+      <p style="margin:0 0 10px;"><strong style="color:#d4ff00;">🏆 Tournament:</strong> <span style="color:#e2e4cf;font-size:1.05em;">${tournament.name}</span></p>
+      ${tournament.sport ? `<p style="margin:0 0 10px;"><strong>Sport:</strong> ${tournament.sport}</p>` : ''}
+      ${eventDate ? `<p style="margin:0 0 10px;"><strong>📅 Event Date:</strong> ${eventDate}</p>` : ''}
+      ${tournament.description ? `<p style="margin:0 0 10px;"><strong>Details:</strong> ${tournament.description}</p>` : ''}
+      <p style="margin:0 0 10px;"><strong>Registration Fee Paid:</strong> <span style="color:#d4ff00;font-size:1.1em;font-weight:700;">₹${parseFloat(tournament.fee_amount || 0).toFixed(2)}</span></p>
+      <p style="margin:0;"><strong>Status:</strong> <span style="color:#34D399;font-weight:700;">Registered ✓</span></p>
+    </div>
+    <p style="color:rgba(197,201,172,0.8);">Your spot has been secured! Please ensure you arrive on time on the event day.</p>
+    <p style="color:rgba(197,201,172,0.8);">You can view your registration details under <strong>Upcoming Tournaments</strong> in your Athlete Dashboard.</p>
+    <p style="margin-top:20px;">Give it your best shot! 💪🏅</p>
+    <p>Best regards,<br/><strong style="color:#06b6d4;">Sports Club Management Team</strong></p>
+  `);
+
+  return sendEmail(student.email, subject, html, { user_id: student.id, user_role: 'Student', notification_type: 'TournamentRegistration' });
+};
+
 /** Payment failed email */
 const sendPaymentFailedEmail = async (student, payment) => {
   const subject = '❌ Payment Failed – Sports Club Management';
@@ -271,8 +319,18 @@ const sendMissingDocumentAlert = async (student, missingDocuments) => {
 };
 
 /** Results published email */
-const sendResultsPublishedEmail = async (student, competition) => {
+const sendResultsPublishedEmail = async (student, competition, certificateLink = null) => {
   const subject = `🏆 Results Published: ${competition.competition_name}`;
+  
+  const certSection = certificateLink
+    ? `
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${certificateLink}" style="display:inline-block;background:#d4ff00;color:#0A0A12;font-weight:700;padding:12px 28px;border-radius:9999px;text-decoration:none;font-size:0.95rem;">
+        📥 Download Certificate
+      </a>
+    </div>`
+    : '';
+
   const html = emailWrapper(`
     <p>Dear <strong style="color:#d4ff00;">${student.full_name}</strong>,</p>
     <p>The results for <strong>${competition.competition_name}</strong> have been published!</p>
@@ -281,6 +339,7 @@ const sendResultsPublishedEmail = async (student, competition) => {
       <p style="margin:0 0 8px;"><strong>Your Result:</strong> ${competition.result_text || 'Participant'}</p>
       <p style="margin:0;"><strong>Medal:</strong> ${competition.medal_won || 'None'}</p>
     </div>
+    ${certSection}
     <p>Login to your athlete dashboard to view your full result and download your certificate.</p>
     <p>Well done for participating! 🎉</p>
   `);
@@ -312,6 +371,7 @@ module.exports = {
   sendOtpEmail,
   sendDocumentStatusEmail,
   sendCompetitionRegistrationEmail,
+  sendTournamentRegistrationEmail,
   sendPaymentSuccessEmail,
   sendPaymentFailedEmail,
   sendUpcomingEventReminder,

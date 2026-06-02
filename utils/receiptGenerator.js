@@ -61,7 +61,7 @@ const generateReceipt = (data) => {
       hour: '2-digit', minute: '2-digit',
     }) : generatedAt;
 
-    const formattedAmount = `${currency || 'INR'} ₹${parseFloat(amount).toFixed(2)}`;
+    const formattedAmount = `${currency || 'INR'} Rs ${parseFloat(amount).toFixed(2)}`;
 
     // A4 portrait
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
@@ -71,18 +71,26 @@ const generateReceipt = (data) => {
     const W = 595.28;
     const H = 841.89;
 
-    // ── Background ────────────────────────────────────────────
-    doc.rect(0, 0, W, H).fill('#0A0A12');
+    // ── Background & Watermark Grid ──────────────────────────
+    doc.rect(0, 0, W, H).fill('#08080E');
+    doc.lineWidth(0.5);
+    doc.strokeColor('rgba(212,255,0,0.015)');
+    for (let x = 0; x < W; x += 30) {
+      doc.moveTo(x, 0).lineTo(x, H).stroke();
+    }
+    for (let y = 0; y < H; y += 30) {
+      doc.moveTo(0, y).lineTo(W, y).stroke();
+    }
 
     // ── Header band ───────────────────────────────────────────
-    doc.rect(0, 0, W, 110).fill('#111827');
-    // Lime accent line
+    doc.rect(0, 0, W, 110).fill('#111422');
+    // Lime brand border
     doc.rect(0, 108, W, 3).fill('#d4ff00');
 
     // Club name
-    doc.font('Helvetica-Bold').fontSize(11)
+    doc.font('Helvetica-Bold').fontSize(10.5)
        .fillColor('#d4ff00')
-       .text('⚡  SPORTS CLUB MANAGEMENT PLATFORM', 0, 30, {
+       .text('SPORTS CLUB MANAGEMENT PLATFORM', 0, 30, {
          align: 'center', width: W, characterSpacing: 1.5,
        });
 
@@ -94,80 +102,116 @@ const generateReceipt = (data) => {
     // Receipt number
     doc.font('Helvetica').fontSize(9)
        .fillColor('rgba(197,201,172,0.55)')
-       .text(`Receipt No: ${receiptNo}`, 0, 84, { align: 'center', width: W });
+       .text(`Receipt Reference: ${receiptNo}`, 0, 84, { align: 'center', width: W });
 
     // ── Status badge ──────────────────────────────────────────
-    const badgeX = W / 2 - 50;
-    doc.roundedRect(badgeX, 125, 100, 26, 13).fill('rgba(52,211,153,0.12)');
-    doc.roundedRect(badgeX, 125, 100, 26, 13).strokeColor('rgba(52,211,153,0.4)').lineWidth(1).stroke();
-    doc.font('Helvetica-Bold').fontSize(9)
+    const badgeX = W / 2 - 60;
+    doc.roundedRect(badgeX, 125, 120, 26, 6).fill('rgba(52,211,153,0.08)');
+    doc.roundedRect(badgeX, 125, 120, 26, 6).strokeColor('rgba(52,211,153,0.35)').lineWidth(0.8).stroke();
+    doc.font('Helvetica-Bold').fontSize(8.5)
        .fillColor('#34D399')
-       .text('✓  PAYMENT SUCCESSFUL', badgeX, 133, { width: 100, align: 'center' });
+       .text('PAYMENT SUCCESSFUL', badgeX, 134, { width: 120, align: 'center' });
 
-    // ── Detail rows ───────────────────────────────────────────
-    const rowStart   = 178;
-    const rowHeight  = 42;
-    const labelX     = 56;
-    const valueX     = 230;
-    const rowW       = W - 112;
+    // ── Invoice Details Layout ────────────────────────────────
+    const startY = 175;
+    const paddingX = 45;
+    const blockW = W - paddingX * 2;
 
-    const rows = [
-      { label: 'Student Name',       value: studentName || '—' },
-      { label: 'Student Email',      value: studentEmail || '—' },
-      { label: 'Competition',        value: competitionName || '—' },
-      { label: 'Fee Type',           value: feeType || 'Competition Fee' },
-      { label: 'Amount Paid',        value: formattedAmount, highlight: true },
-      { label: 'Payment Status',     value: 'Paid', status: true },
-      { label: 'Razorpay Order ID',  value: razorpayOrderId || '—' },
-      { label: 'Razorpay Pay. ID',   value: razorpayPaymentId || '—' },
-      { label: 'Payment Date',       value: paidDate },
-      { label: 'Generated On',       value: generatedAt },
+    // Student Info Block
+    doc.rect(paddingX, startY, blockW, 55)
+       .fill('rgba(255,255,255,0.02)')
+       .strokeColor('rgba(255,255,255,0.05)').lineWidth(0.8).stroke();
+       
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#06b6d4').text('BILL TO:', paddingX + 15, startY + 12);
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#e2e4cf').text(studentName || 'Athlete', paddingX + 15, startY + 28);
+    doc.font('Helvetica').fontSize(9.5).fillColor('rgba(197,201,172,0.65)').text(studentEmail || '', paddingX + 220, startY + 28, { width: blockW - 240, align: 'right' });
+
+    // Itemized Table Shaded Header
+    const tableY = startY + 75;
+    doc.rect(paddingX, tableY, blockW, 25).fill('#111422');
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('rgba(197,201,172,0.85)');
+    doc.text('ITEM DESCRIPTION', paddingX + 15, tableY + 8, { characterSpacing: 0.5 });
+    doc.text('ORDER & REFERENCE DETAILS', paddingX + 200, tableY + 8, { characterSpacing: 0.5 });
+    doc.text('TOTAL PAID', paddingX + 410, tableY + 8, { width: 80, align: 'right', characterSpacing: 0.5 });
+
+    // Table Content Items
+    const contentRows = [
+      { desc: `${feeType || 'Competition Fee'} - ${competitionName || 'Event Fee'}`, refLabel: 'Order Ref:', refVal: razorpayOrderId || '—' },
+      { desc: 'Transaction Method: Razorpay Gateway', refLabel: 'Payment ID:', refVal: razorpayPaymentId || '—' },
+      { desc: `Payment Settled: ${paidDate}`, refLabel: 'Settlement Date:', refVal: paidDate },
+      { desc: `Receipt Document generated on ${generatedAt}`, refLabel: 'Status:', refVal: 'PAID / SETTLED', isStatus: true }
     ];
 
-    rows.forEach((row, i) => {
-      const y    = rowStart + i * rowHeight;
-      const even = i % 2 === 0;
+    const rowH = 34;
+    contentRows.forEach((item, index) => {
+      const currentY = tableY + 25 + index * rowH;
+      
+      // Zebra shading
+      if (index % 2 === 0) {
+        doc.rect(paddingX, currentY, blockW, rowH).fill('rgba(255,255,255,0.01)');
+      }
 
-      // Row background
-      doc.rect(labelX - 8, y - 4, rowW + 16, rowHeight)
-         .fill(even ? 'rgba(255,255,255,0.02)' : 'transparent');
+      // Thin bottom border
+      doc.moveTo(paddingX, currentY + rowH).lineTo(paddingX + blockW, currentY + rowH)
+         .lineWidth(0.5).strokeColor('rgba(255,255,255,0.05)').stroke();
 
-      // Bottom border
-      doc.moveTo(labelX, y + rowHeight - 5)
-         .lineTo(labelX + rowW, y + rowHeight - 5)
-         .lineWidth(0.5)
-         .strokeColor('rgba(255,255,255,0.05)')
-         .stroke();
+      // Description
+      doc.font('Helvetica').fontSize(9).fillColor('#e2e4cf').text(item.desc, paddingX + 15, currentY + 11, { width: 175 });
 
-      // Label
-      doc.font('Helvetica').fontSize(9)
-         .fillColor('rgba(197,201,172,0.5)')
-         .text(row.label.toUpperCase(), labelX, y + 6, { width: 160, characterSpacing: 0.5 });
-
-      // Value
-      const valueColor = row.highlight ? '#d4ff00'
-                       : row.status    ? '#34D399'
-                       :                 '#e2e4cf';
-      const valueFontSize = row.highlight ? 12 : 9.5;
-
-      doc.font(row.highlight || row.status ? 'Helvetica-Bold' : 'Helvetica')
-         .fontSize(valueFontSize)
-         .fillColor(valueColor)
-         .text(row.value, valueX, y + (row.highlight ? 4 : 6), { width: 310 });
+      // Reference fields
+      doc.font('Helvetica').fontSize(8).fillColor('rgba(197,201,172,0.5)').text(item.refLabel, paddingX + 200, currentY + 12);
+      
+      const valColor = item.isStatus ? '#34D399' : '#e2e4cf';
+      doc.font(item.isStatus ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor(valColor).text(item.refVal, paddingX + 265, currentY + 12, { width: 135 });
     });
 
+    // Total Amount Highlight Row
+    const totalRowY = tableY + 25 + contentRows.length * rowH;
+    doc.rect(paddingX, totalRowY, blockW, rowH + 8).fill('rgba(212,255,0,0.02)');
+    doc.rect(paddingX, totalRowY, blockW, rowH + 8).strokeColor('rgba(212,255,0,0.1)').lineWidth(0.8).stroke();
+    
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#d4ff00').text('TOTAL AMOUNT RECEIVED:', paddingX + 15, totalRowY + 13);
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('#d4ff00').text(formattedAmount, paddingX + 380, totalRowY + 11, { width: 110, align: 'right' });
+
+    // ── Signatory & Paid Seal Section ─────────────────────────
+    const sigBlockY = totalRowY + rowH + 45;
+
+    // Authorized Seal (Left)
+    const sealX = paddingX + 60;
+    const sealY = sigBlockY + 20;
+    doc.circle(sealX, sealY, 26).lineWidth(1.2).strokeColor('rgba(52,211,153,0.4)').stroke();
+    doc.circle(sealX, sealY, 22).lineWidth(0.8).strokeColor('rgba(52,211,153,0.2)').stroke();
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#34D399').text('PAID', sealX - 20, sealY - 5, { width: 40, align: 'center', characterSpacing: 1 });
+
+    // Accounts Signature (Right)
+    const accountsSigX = W - paddingX - 160;
+    const accountsSigY = sigBlockY + 20;
+
+    // Simulated signature cursive script
+    doc.font('Times-BoldItalic').fontSize(15).fillColor('#06b6d4')
+       .text('E. Sterling', accountsSigX, accountsSigY - 14, { width: 140, align: 'center' });
+    // Pen stroke
+    doc.moveTo(accountsSigX + 10, accountsSigY - 4)
+       .bezierCurveTo(accountsSigX + 40, accountsSigY - 15, accountsSigX + 80, accountsSigY + 5, accountsSigX + 130, accountsSigY - 6)
+       .lineWidth(1).strokeColor('rgba(6,182,212,0.5)').stroke();
+
+    doc.moveTo(accountsSigX, accountsSigY).lineTo(accountsSigX + 140, accountsSigY)
+       .lineWidth(1).strokeColor('rgba(255,255,255,0.15)').stroke();
+    doc.font('Helvetica').fontSize(8.5).fillColor('rgba(197,201,172,0.5)')
+       .text('Authorized Signatory', accountsSigX, accountsSigY + 8, { width: 140, align: 'center' });
+
     // ── Divider before footer ─────────────────────────────────
-    const footerY = rowStart + rows.length * rowHeight + 20;
-    doc.moveTo(labelX, footerY).lineTo(W - labelX, footerY)
-       .lineWidth(1).strokeColor('rgba(212,255,0,0.2)').stroke();
+    const footerY = H - 85;
+    doc.moveTo(paddingX, footerY).lineTo(W - paddingX, footerY)
+       .lineWidth(0.8).strokeColor('rgba(212,255,0,0.15)').stroke();
 
     // ── Footer ────────────────────────────────────────────────
     doc.font('Helvetica').fontSize(8)
-       .fillColor('rgba(197,201,172,0.35)')
+       .fillColor('rgba(197,201,172,0.4)')
        .text(
-         'This is a computer-generated receipt and does not require a signature.\n' +
-         'For any queries, please contact your club administrator.',
-         labelX, footerY + 16, { width: rowW, align: 'center' }
+         'This is an officially processed electronic receipt from the Sports Club Management Platform.\n' +
+         'All transactions are secured and settled via Razorpay API. No physical signature is required.',
+         paddingX, footerY + 14, { width: blockW, align: 'center', lineGap: 3 }
        );
 
     // Bottom lime bar
@@ -177,11 +221,11 @@ const generateReceipt = (data) => {
     doc.end();
 
     writeStream.on('finish', () => {
-      console.log(`🧾  Receipt generated: ${relPath}`);
+      console.log(`Receipt generated: ${relPath}`);
       resolve(relPath);
     });
     writeStream.on('error', (err) => {
-      console.error('❌  Receipt generation failed:', err.message);
+      console.error('Receipt generation failed:', err.message);
       reject(err);
     });
   });

@@ -235,12 +235,15 @@ router.put('/:id/publish', async (req, res) => {
     // Send email (non-blocking — result publish should not fail if email fails)
     const student = await getStudent(record.student_id);
     if (student) {
+      const certLink = record.certificate_url
+        ? `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${id}/download-certificate`
+        : null;
       sendResultsPublishedEmail(student, {
         competition_name: record.competition_name,
         competition_date: fmtDate(record.competition_date),
         result_text:      record.result_text,
         medal_won:        record.medal_won,
-      }).catch(err => console.error('Email send error (non-fatal):', err.message));
+      }, certLink).catch(err => console.error('Email send error (non-fatal):', err.message));
     }
 
     res.json({ message: 'Result published successfully. Student notification sent.' });
@@ -271,8 +274,11 @@ router.post('/:id/generate-certificate', async (req, res) => {
     }
     const record = rows[0];
 
-    // Generate PDF
-    const relPath = await generateCertificate({
+    // Respond immediately – PDF generation can be slow on first run
+    res.json({ message: '⏳ Certificate generation started! Email will be sent to the student once ready.' });
+
+    // ── Generate PDF, save to DB, and email – all in background ─
+    generateCertificate({
       resultId:        record.id,
       studentName:     record.full_name || 'Athlete',
       competitionName: record.competition_name,
@@ -282,26 +288,30 @@ router.post('/:id/generate-certificate', async (req, res) => {
       medalWon:        record.medal_won || 'None',
       resultText:      record.result_text || 'Participant',
       eventName:       record.event_name || '',
+    }).then(async (relPath) => {
+      // Save path to DB
+      await db.execute(
+        'UPDATE competition_results SET certificate_url = ?, certificate_generated_at = NOW() WHERE id = ?',
+        [relPath, id]
+      );
+      console.log(`📜  Certificate saved: ${relPath}`);
+
+      // Send email (non-blocking)
+      if (record.email) {
+        const student  = { id: record.student_id, full_name: record.full_name, email: record.email };
+        const certLink = `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${id}/download-certificate`;
+        sendCertificateAvailableEmail(student, certLink)
+          .catch(err => console.error('Certificate email error (non-fatal):', err.message));
+      }
+    }).catch(err => {
+      console.error('Background certificate generation error:', err.message);
     });
 
-    // Save path to DB
-    await db.execute(
-      'UPDATE competition_results SET certificate_url = ?, certificate_generated_at = NOW() WHERE id = ?',
-      [relPath, id]
-    );
-
-    // Send email (non-blocking)
-    if (record.email) {
-      const student  = { id: record.student_id, full_name: record.full_name, email: record.email };
-      const certLink = `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${id}/download-certificate`;
-      sendCertificateAvailableEmail(student, certLink)
-        .catch(err => console.error('Certificate email error (non-fatal):', err.message));
-    }
-
-    res.json({ message: 'Certificate generated successfully.', certificate_url: relPath });
   } catch (err) {
     console.error('Generate certificate error:', err);
-    res.status(500).json({ message: 'Server error.' });
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Server error.' });
+    }
   }
 });
 
@@ -415,12 +425,19 @@ router.post('/:id/send-certificate-email', async (req, res) => {
 
     const student  = { id: student_id, full_name, email };
     const certLink = `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${id}/download-certificate`;
-    const sent = await sendCertificateAvailableEmail(student, certLink);
 
-    res.json({ message: sent ? 'Certificate email sent.' : 'Email failed (logged).' });
+    // Respond immediately so the frontend isn't blocked by SMTP latency
+    res.json({ message: '📧 Certificate email is being sent to ' + email });
+
+    // Send email non-blocking (logged to notification_logs regardless of outcome)
+    sendCertificateAvailableEmail(student, certLink)
+      .catch(err => console.error('Certificate email error (non-fatal):', err.message));
+
   } catch (err) {
     console.error('Send cert email error:', err);
-    res.status(500).json({ message: 'Server error.' });
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Server error.' });
+    }
   }
 });
 
