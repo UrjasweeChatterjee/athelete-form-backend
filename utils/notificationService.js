@@ -2,9 +2,8 @@
 // utils/notificationService.js  –  Centralised notification system
 //
 // All notifications are handled via EMAIL only.
-// Wraps the existing mailer.js SMTP config with higher-level
-// event-specific functions AND logs every attempt to the
-// notification_logs database table.
+// Primary driver: Resend HTTP API (works on Railway - uses port 443).
+// Fallback driver: Nodemailer SMTP (for local development).
 //
 // IMPORTANT:
 //  - Email failures NEVER throw / crash the server.
@@ -15,23 +14,23 @@ const nodemailer = require('nodemailer');
 const db         = require('../db');
 require('dotenv').config();
 
-// ── SMTP Transporter (reuses same config as mailer.js) ────────
+// ── SMTP Transporter (fallback for local dev without Resend) ──
+const smtpPort = parseInt(process.env.MAIL_PORT) || 587;
 const transporter = nodemailer.createTransport({
   host:    process.env.MAIL_HOST || 'smtp.gmail.com',
-  port:    parseInt(process.env.MAIL_PORT) || 587,
-  secure:  false,
-  pool:    true,          // Reuse SMTP connections (faster subsequent sends)
+  port:    smtpPort,
+  secure:  smtpPort === 465 || process.env.MAIL_SECURE === 'true',
+  pool:    true,
   maxConnections: 5,
   maxMessages: 100,
-  rateDelta: 1000,        // Throttle: max 'rateLimit' messages per 'rateDelta' ms
+  rateDelta: 1000,
   rateLimit: 10,
+  connectionTimeout: 10000,
   auth: {
     user: process.env.MAIL_USER,
     pass: process.env.MAIL_PASS,
   },
-  tls: {
-    rejectUnauthorized: false, // Allow self-signed or chain-incomplete TLS certs
-  },
+  tls: { rejectUnauthorized: false },
 });
 
 // ── Helper: log notification attempt to DB ────────────────────
@@ -62,48 +61,100 @@ const logNotification = async ({ user_id, user_role, notification_type, channel,
 
 // ── Core: sendEmail ───────────────────────────────────────────
 /**
- * Send an email and log the result.
- * @param {string} to          - recipient email
- * @param {string} subject     - email subject
- * @param {string} html        - HTML body
- * @param {object} meta        - { user_id, user_role, notification_type }
- * @returns {boolean}          - true if sent successfully
+ * Send an email via Resend HTTP API (when RESEND_API_KEY is set)
+ * or fall back to nodemailer SMTP.
+ * Resend communicates over HTTPS (port 443) — never blocked by Railway.
  */
 const sendEmail = async (to, subject, html, meta = {}) => {
   const { user_id, user_role = 'Student', notification_type = 'General' } = meta;
+  const fromEmail = process.env.BREVO_SENDER_EMAIL
+    || process.env.RESEND_FROM
+    || process.env.MAIL_USER
+    || 'noreply@example.com';
+  const fromName  = process.env.MAIL_FROM_NAME || 'Sports Club Management';
+  const plainText = html.replace(/<[^>]+>/g, '').substring(0, 500);
 
-  const mailOptions = {
-    from: process.env.MAIL_FROM || `"Sports Club Management" <${process.env.MAIL_USER}>`,
-    to,
-    subject,
-    html,
-  };
+  // ── Path 1: Brevo HTTP API (no domain needed — just verified sender email) ──
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const https = require('https');
+      const payload = JSON.stringify({
+        sender:      { name: fromName, email: fromEmail },
+        to:          [{ email: to }],
+        subject,
+        htmlContent: html,
+      });
 
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: 'api.brevo.com',
+          path:     '/v3/smtp/email',
+          method:   'POST',
+          headers:  {
+            'api-key':      process.env.BREVO_API_KEY,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        }, (res) => {
+          let body = '';
+          res.on('data', chunk => body += chunk);
+          res.on('end', () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              resolve(body);
+            } else {
+              reject(new Error(`Brevo responded with ${res.statusCode}: ${body}`));
+            }
+          });
+        });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+
+      console.log(`📧  [Brevo][${notification_type}] Sent to ${to}`);
+      await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Sent' });
+      return true;
+    } catch (err) {
+      console.error(`❌  [Brevo][${notification_type}] Failed for ${to}:`, err.message);
+      await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Failed', error_message: `Brevo: ${err.message}` });
+      return false;
+    }
+  }
+
+  // ── Path 2: Resend HTTP API ────────────────────────────────────
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const { Resend } = require('resend');
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      const { data, error } = await resend.emails.send({
+        from:    `${fromName} <${process.env.RESEND_FROM || fromEmail}>`,
+        to:      [to],
+        subject,
+        html,
+      });
+      if (error) throw new Error(error.message || JSON.stringify(error));
+      console.log(`📧  [Resend][${notification_type}] Sent to ${to} — id: ${data?.id}`);
+      await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Sent' });
+      return true;
+    } catch (err) {
+      console.error(`❌  [Resend][${notification_type}] Failed for ${to}:`, err.message);
+      await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Failed', error_message: `Resend: ${err.message}` });
+      return false;
+    }
+  }
+
+  // ── Path 3: Nodemailer SMTP (local development fallback) ──────
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`📧  [${notification_type}] Email sent to ${to}: ${info.messageId}`);
-
-    await logNotification({
-      user_id, user_role, notification_type,
-      channel:   'Email',
-      recipient: to,
-      subject,
-      message:   html.replace(/<[^>]+>/g, '').substring(0, 500), // plain text excerpt
-      status:    'Sent',
+    const info = await transporter.sendMail({
+      from:    `"${fromName}" <${process.env.MAIL_USER}>`,
+      to, subject, html,
     });
+    console.log(`📧  [SMTP][${notification_type}] Sent to ${to}: ${info.messageId}`);
+    await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Sent' });
     return true;
   } catch (err) {
-    console.error(`❌  [${notification_type}] Email to ${to} failed:`, err.message);
-
-    await logNotification({
-      user_id, user_role, notification_type,
-      channel:       'Email',
-      recipient:     to,
-      subject,
-      message:       html.replace(/<[^>]+>/g, '').substring(0, 500),
-      status:        'Failed',
-      error_message: err.message,
-    });
+    console.error(`❌  [SMTP][${notification_type}] Failed for ${to}:`, err.message);
+    await logNotification({ user_id, user_role, notification_type, channel: 'Email', recipient: to, subject, message: plainText, status: 'Failed', error_message: `SMTP: ${err.message}` });
     return false;
   }
 };
