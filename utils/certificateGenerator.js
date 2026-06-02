@@ -10,6 +10,7 @@
 const PDFDocument = require('pdfkit');
 const path        = require('path');
 const fs          = require('fs');
+const QRCode      = require('qrcode');
 
 // Ensure certificates folder exists
 const CERT_DIR = path.join(__dirname, '..', 'uploads', 'certificates');
@@ -34,28 +35,43 @@ if (!fs.existsSync(CERT_DIR)) {
  * @returns {string} relative file path — e.g. uploads/certificates/cert_42_1717000000.pdf
  */
 const generateCertificate = (data) => {
-  return new Promise((resolve, reject) => {
-    const {
-      resultId,
-      studentName,
-      competitionName,
-      competitionDate,
-      categoryLevel,
-      ageGroup,
-      medalWon,
-      resultText,
-      eventName,
-    } = data;
+  return new Promise(async (resolve, reject) => {
+    try {
+      const {
+        resultId,
+        studentName,
+        competitionName,
+        competitionDate,
+        categoryLevel,
+        ageGroup,
+        medalWon,
+        resultText,
+        eventName,
+      } = data;
 
-    const timestamp = Date.now();
-    const filename  = `cert_${resultId}_${timestamp}.pdf`;
-    const filePath  = path.join(CERT_DIR, filename);
-    const relPath   = `uploads/certificates/${filename}`;
+      const timestamp = Date.now();
+      const filename  = `cert_${resultId}_${timestamp}.pdf`;
+      const filePath  = path.join(CERT_DIR, filename);
+      const relPath   = `uploads/certificates/${filename}`;
 
-    // Certificate ID for tracking
-    const certId = `SCM-CERT-${String(resultId).padStart(6, '0')}-${timestamp.toString().slice(-6)}`;
+      // Generate QR code for validation
+      const frontendUrl = (process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost'))
+        ? process.env.FRONTEND_URL
+        : 'https://athelete-form-frontend.vercel.app';
+      const verificationUrl = `${frontendUrl}/verify-certificate/${resultId}`;
+      const qrBuffer = await QRCode.toBuffer(verificationUrl, {
+        margin: 1,
+        width: 150,
+        color: {
+          dark: '#d4ff00',  // neon lime
+          light: '#08080F'  // background color
+        }
+      });
 
-    // Medal colour map
+      // Certificate ID for tracking
+      const certId = `SCM-CERT-${String(resultId).padStart(6, '0')}-${timestamp.toString().slice(-6)}`;
+
+      // Medal colour map
     const medalColors = {
       Gold:   '#D4AF37',
       Silver: '#A8A9AD',
@@ -273,6 +289,13 @@ const generateCertificate = (data) => {
     doc.font('Helvetica').fontSize(9).fillColor('rgba(197,201,172,0.5)')
        .text('Club Administrator Signature', rightSigX, rightSigY + 8, { width: 140, align: 'center' });
 
+    // ── QR Code Verification ─────────────────────────────────
+    doc.image(qrBuffer, W - 110, H - 115, { width: 60, height: 60 });
+    doc.font('Helvetica-Bold')
+       .fontSize(6)
+       .fillColor('rgba(197,201,172,0.45)')
+       .text('VERIFY', W - 110, H - 124, { width: 60, align: 'center' });
+
     // ── Finish ───────────────────────────────────────────────
     doc.end();
 
@@ -284,6 +307,9 @@ const generateCertificate = (data) => {
       console.error('❌  Certificate generation failed:', err.message);
       reject(err);
     });
+    } catch (err) {
+      reject(err);
+    }
   });
 };
 

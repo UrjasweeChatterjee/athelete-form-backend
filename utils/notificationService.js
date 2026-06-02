@@ -115,7 +115,7 @@ const emailWrapper = (content) => `
     <div style="background:linear-gradient(135deg,#0d0d1e 0%,#111827 100%);padding:28px 36px;border-bottom:2.5px solid #d4ff00;display:flex;align-items:center;justify-content:space-between;">
       <div>
         <h2 style="margin:0;color:#d4ff00;font-size:1.15rem;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;">
-          &#9889; APEX VELOCITY
+          &#9889; Sports Club
         </h2>
         <span style="color:#06b6d4;font-size:0.7rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Sports Club Hub</span>
       </div>
@@ -129,7 +129,7 @@ const emailWrapper = (content) => `
       <hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:32px 0;" />
       <div style="display:flex;align-items:center;justify-content:space-between;">
         <p style="color:rgba(197,201,172,0.45);font-size:0.75rem;line-height:1.5;margin:0;">
-          This is an automated operational transmission from Apex Velocity.<br/>
+          This is an automated operational transmission from Sports Club.<br/>
           To protect security, please do not reply directly to this inbox.
         </p>
       </div>

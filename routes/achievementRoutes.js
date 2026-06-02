@@ -441,4 +441,192 @@ router.post('/:id/send-certificate-email', async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────
+// GET /api/achievements/public/verify/:id
+// Public verification endpoint. Returns certificate data if verified.
+// ──────────────────────────────────────────────────────────────
+router.get('/public/verify/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT cr.*, s.full_name, s.email
+       FROM competition_results cr
+       LEFT JOIN students s ON s.id = cr.student_id
+       WHERE cr.id = ?`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ verified: false, message: 'Certificate verification failed: Record not found.' });
+    }
+
+    const record = rows[0];
+    if (record.result_status !== 'Published') {
+      return res.status(400).json({ verified: false, message: 'Certificate verification failed: Result is in Draft/Pending status.' });
+    }
+
+    res.json({
+      verified: true,
+      student_name: record.full_name,
+      competition_name: record.competition_name,
+      competition_date: record.competition_date,
+      category_level: record.category_level,
+      age_group: record.age_group,
+      event_name: record.event_name,
+      medal_won: record.medal_won,
+      result_text: record.result_text,
+      certificate_url: record.certificate_url,
+      certificate_generated_at: record.certificate_generated_at,
+    });
+  } catch (err) {
+    console.error('Verify certificate error:', err);
+    res.status(500).json({ message: 'Server error during certificate verification.' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/achievements/admin/bulk-generate
+// Coach/Admin: bulk generate certificates and email them to students.
+// ──────────────────────────────────────────────────────────────
+router.post('/admin/bulk-generate', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'No certificate IDs provided.' });
+    }
+
+    // Fetch records
+    const [records] = await db.execute(
+      `SELECT cr.*, s.full_name, s.email
+       FROM competition_results cr
+       LEFT JOIN students s ON s.id = cr.student_id
+       WHERE cr.id IN (${ids.map(() => '?').join(',')})`,
+      ids
+    );
+
+    if (records.length === 0) {
+      return res.status(404).json({ message: 'No result records found for the given IDs.' });
+    }
+
+    // Respond immediately
+    res.json({ message: `⏳ Bulk certificate generation started for ${records.length} records! Emails will be sent to the students once ready.` });
+
+    // Process in background sequentially
+    (async () => {
+      for (const record of records) {
+        try {
+          const relPath = await generateCertificate({
+            resultId:        record.id,
+            studentName:     record.full_name || 'Athlete',
+            competitionName: record.competition_name,
+            competitionDate: fmtDate(record.competition_date),
+            categoryLevel:   record.category_level || '',
+            ageGroup:        record.age_group || '',
+            medalWon:        record.medal_won || 'None',
+            resultText:      record.result_text || 'Participant',
+            eventName:       record.event_name || '',
+          });
+
+          // Save path to DB
+          await db.execute(
+            'UPDATE competition_results SET certificate_url = ?, certificate_generated_at = NOW() WHERE id = ?',
+            [relPath, record.id]
+          );
+
+          // Send email
+          if (record.email) {
+            const student = { id: record.student_id, full_name: record.full_name, email: record.email };
+            const certLink = `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${record.id}/download-certificate`;
+            await sendCertificateAvailableEmail(student, certLink);
+          }
+        } catch (err) {
+          console.error(`❌ [Bulk] Failed for record ID ${record.id}:`, err.message);
+        }
+      }
+    })().catch(err => {
+      console.error('Fatal error in bulk certificate background job:', err.message);
+    });
+
+  } catch (err) {
+    console.error('Bulk generate certificate error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Server error.' });
+    }
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/achievements/admin/bulk-publish
+// Coach/Admin: bulk publish results and email students.
+// ──────────────────────────────────────────────────────────────
+router.post('/admin/bulk-publish', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'No certificate IDs provided.' });
+    }
+
+    // Fetch records
+    const [records] = await db.execute(
+      `SELECT cr.*, s.full_name, s.email
+       FROM competition_results cr
+       LEFT JOIN students s ON s.id = cr.student_id
+       WHERE cr.id IN (${ids.map(() => '?').join(',')})`,
+      ids
+    );
+
+    if (records.length === 0) {
+      return res.status(404).json({ message: 'No result records found for the given IDs.' });
+    }
+
+    // Filter out already published
+    const unpublishedRecords = records.filter(r => r.result_status !== 'Published');
+    if (unpublishedRecords.length === 0) {
+      return res.json({ message: 'All selected results are already published.' });
+    }
+
+    const unpublishedIds = unpublishedRecords.map(r => r.id);
+
+    // Publish in bulk
+    await db.execute(
+      `UPDATE competition_results
+       SET result_status = 'Published', published_at = NOW()
+       WHERE id IN (${unpublishedIds.map(() => '?').join(',')})`,
+      unpublishedIds
+    );
+
+    // Send emails in background
+    (async () => {
+      for (const record of unpublishedRecords) {
+        try {
+          const student = { id: record.student_id, full_name: record.full_name, email: record.email };
+          if (student.email) {
+            const certLink = record.certificate_url
+              ? `${process.env.BACKEND_URL || 'http://localhost:5002'}/api/achievements/${record.id}/download-certificate`
+              : null;
+            await sendResultsPublishedEmail(student, {
+              competition_name: record.competition_name,
+              competition_date: fmtDate(record.competition_date),
+              result_text:      record.result_text,
+              medal_won:        record.medal_won,
+            }, certLink);
+          }
+        } catch (err) {
+          console.error(`❌ [Bulk Publish] Email failed for student ${record.email}:`, err.message);
+        }
+      }
+    })().catch(err => console.error('Error in bulk publish background emails:', err.message));
+
+    res.json({ message: `Successfully published ${unpublishedIds.length} results. Student notification emails sent.` });
+
+  } catch (err) {
+    console.error('Bulk publish error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Server error.' });
+    }
+  }
+});
+
 module.exports = router;
+
