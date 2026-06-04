@@ -19,7 +19,8 @@ const router = express.Router();
 // ──────────────────────────────────────────────────────────────
 router.get('/logs', async (req, res) => {
   try {
-    const limit  = Math.min(parseInt(req.query.limit) || 100, 500);
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const limit = Math.min(Math.max(isNaN(parsedLimit) ? 100 : parsedLimit, 1), 500);
     const status = req.query.status; // optional filter: Sent | Failed | Pending
 
     let query  = 'SELECT * FROM notification_logs';
